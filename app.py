@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+from io import StringIO
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -22,185 +24,165 @@ st.markdown("""
     </iframe>
 """, unsafe_allow_html=True)
 
-# Sidebar for uploading dataset
-st.sidebar.header("Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
+# Define dataset URL from GitHub
+dataset_url = "https://raw.githubusercontent.com/SiddharthaSomalinga/FireShield/refs/heads/main/dataset.csv"
 
-if uploaded_file:
-    # Load dataset
-    df = pd.read_csv(uploaded_file)
-
-    # Display the dataset preview
-    st.subheader("Dataset Preview")
-
-    # Ensure 'Year' column is displayed as integers without formatting
-    if "Year" in df.columns:
-        df["Year"] = df["Year"].astype(int)
-
-    st.dataframe(df.head())
-
-    # Debug: Show unique values in each column
-    #st.write("Unique values in each column:")
-    #for col in df.columns:
-    #    st.write(f"{col}: {df[col].unique()}")
-
-    # Strip extra spaces from column names
-    df.columns = df.columns.str.strip()
-
-    # Select the features to use for prediction
-    features = ['Temperature', 'RH (Relative Humidity)', 'WS (Wind Speed)', 'Rain']
-
-    # Ensure all the selected features exist in the dataset
-    for feature in features:
-        if feature not in df.columns:
-            st.error(f"Missing required feature: {feature}")
-            st.stop()
-
-    # Automatically set the target column to "Result" if it exists
-    target_column = "Result"
-    if target_column not in df.columns:
-        st.error(f"Target column '{target_column}' not found in the dataset.")
+# Function to download and cache dataset
+@st.cache_data
+def download_dataset(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Check if the request was successful
+        return pd.read_csv(StringIO(response.text))
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to download dataset: {str(e)}")
         st.stop()
 
-    # Debug: Show target column unique values
-    #st.write(f"Target column ({target_column}) unique values:", df[target_column].unique())
+# Load dataset
+df = download_dataset(dataset_url)
 
-    # Clean the target column values by stripping whitespace and handling NaN values
-    df[target_column] = df[target_column].str.strip()  # Remove extra spaces
-    df = df.dropna(subset=[target_column])  # Drop rows with NaN values in the target column
-    df[target_column] = df[target_column].replace({"fire": "fire", "not fire": "not fire"})  # Standardize labels
+# Display the dataset preview
+st.subheader("Dataset Preview")
 
-    # Debug: Show target column unique values after cleaning
-    #st.write(f"Target column values after cleaning:", df[target_column].unique())
+# Ensure 'Year' column is displayed as integers if it exists
+if "Year" in df.columns:
+    df["Year"] = df["Year"].astype(int)
 
-    # Convert all numeric columns
-    df = df.apply(lambda x: pd.to_numeric(x, errors="coerce") if x.name not in [target_column] else x)
+st.dataframe(df.head())
 
-    # Handle missing values
-    numeric_cols = df[features + [target_column]].select_dtypes(include=[np.number]).columns
-    df[numeric_cols] = df[numeric_cols].apply(lambda col: col.fillna(col.mean()))
+# Strip extra spaces from column names
+df.columns = df.columns.str.strip()
 
-    # Define feature and target variables
-    X = df[features]
-    y = df[target_column]
+# Select the features to use for prediction
+features = ['Temperature', 'RH (Relative Humidity)', 'WS (Wind Speed)', 'Rain']
 
-    # Split dataset
-    test_size = st.sidebar.slider("Test Size (Fraction)", 0.1, 0.5, 0.2)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+# Ensure all the selected features exist in the dataset
+for feature in features:
+    if feature not in df.columns:
+        st.error(f"Missing required feature: {feature}")
+        st.stop()
 
-    # Standardize feature data
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
+# Automatically set target column to "Result"
+target_column = "Result"
+if target_column not in df.columns:
+    st.error(f"Target column '{target_column}' not found in the dataset.")
+    st.stop()
 
-    # Initialize model_trained flag and rf_model in session_state
-    if 'model_trained' not in st.session_state:
-        st.session_state.model_trained = False
-    if 'rf_model' not in st.session_state:
-        st.session_state.rf_model = None
+# Clean and process the target column
+df[target_column] = df[target_column].astype(str).str.strip().str.lower()  # Standardize labels
+df = df.dropna(subset=[target_column])  # Drop rows with NaN values in the target column
 
-    # Train Random Forest Classifier
-    n_estimators = st.sidebar.slider("Number of Trees (n_estimators)", 50, 500, 100)
-    rf_model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+# Convert all numeric columns
+df = df.apply(lambda x: pd.to_numeric(x, errors="coerce") if x.name not in [target_column] else x)
 
-    if st.sidebar.button("Train Model"):
-        rf_model.fit(X_train, y_train)
-        st.session_state.rf_model = rf_model  # Save the trained model in session state
-        st.session_state.model_trained = True  # Set the model_trained flag to True
-        y_pred = rf_model.predict(X_test)
+# Handle missing values
+numeric_cols = df[features + [target_column]].select_dtypes(include=[np.number]).columns
+df[numeric_cols] = df[numeric_cols].apply(lambda col: col.fillna(col.mean()))
 
-        # Debug: Show model classes after training
-        #st.write("Model Classes after training:", rf_model.classes_)
+# Define feature and target variables
+X = df[features]
+y = df[target_column]
 
-        # Evaluate the model
-        st.subheader("Model Evaluation")
-        st.write(f"**Accuracy:** {accuracy_score(y_test, y_pred):.2f}")
+# Split dataset
+test_size = st.sidebar.slider("Test Size (Fraction)", 0.1, 0.5, 0.2)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 
-        # Feature Importance
-        st.subheader("Feature Importance")
-        feature_importance = rf_model.feature_importances_
-        importance_df = pd.DataFrame({"Feature": features, "Importance": feature_importance}).sort_values(
-            by="Importance", ascending=False)
+# Standardize feature data
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
 
-        # Display Feature Importance
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(x="Importance", y="Feature", data=importance_df, palette="viridis", ax=ax)
-        ax.set_title("Feature Importance in Forest Fire Prediction")
-        ax.set_xlabel("Importance")
-        ax.set_ylabel("Feature")
-        st.pyplot(fig)
+# Initialize model_trained flag and rf_model in session_state
+if 'model_trained' not in st.session_state:
+    st.session_state.model_trained = False
+if 'rf_model' not in st.session_state:
+    st.session_state.rf_model = None
 
-    # Input form for prediction
-    st.header("Predict Forest Fire")
-    st.subheader("Enter Feature Values for Prediction")
-    user_input = {}
+# Train Random Forest Classifier
+n_estimators = st.sidebar.slider("Number of Trees (n_estimators)", 50, 500, 100)
+rf_model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
 
-    # Create number input fields for each feature on the main page
-    for feature in features:
-        user_input[feature] = st.number_input(f"Enter {feature}", value=float(X[feature].mean()))
+if st.sidebar.button("Train Model"):
+    rf_model.fit(X_train, y_train)
+    st.session_state.rf_model = rf_model  # Save the trained model in session state
+    st.session_state.model_trained = True  # Set the model_trained flag to True
+    y_pred = rf_model.predict(X_test)
 
-    # Prediction button on the main page
-    if st.button("Predict"):
-        if not st.session_state.model_trained:
+    # Evaluate the model
+    st.subheader("Model Evaluation")
+    st.write(f"**Accuracy:** {accuracy_score(y_test, y_pred):.2f}")
+
+    # Feature Importance
+    st.subheader("Feature Importance")
+    feature_importance = rf_model.feature_importances_
+    importance_df = pd.DataFrame({"Feature": features, "Importance": feature_importance}).sort_values(
+        by="Importance", ascending=False)
+
+    # Display Feature Importance
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(x="Importance", y="Feature", data=importance_df, palette="viridis", ax=ax)
+    ax.set_title("Feature Importance in Forest Fire Prediction")
+    ax.set_xlabel("Importance")
+    ax.set_ylabel("Feature")
+    st.pyplot(fig)
+
+# Input form for prediction
+st.header("Predict Forest Fire")
+st.subheader("Enter Feature Values for Prediction")
+user_input = {}
+
+# Create number input fields for each feature on the main page
+for feature in features:
+    user_input[feature] = st.number_input(f"Enter {feature}", value=float(X[feature].mean()))
+
+# Prediction button on the main page
+if st.button("Predict"):
+    if not st.session_state.model_trained:
+        st.error("The model is not trained yet. Please train the model before making predictions.")
+    else:
+        # Retrieve the trained model
+        rf_model = st.session_state.rf_model
+
+        # Create a DataFrame for the user input
+        input_df = pd.DataFrame([user_input])
+
+        # Check if there are any missing values and handle them
+        input_df = input_df.apply(lambda x: x.fillna(x.mean()) if x.name != target_column else x)
+
+        # Apply the same scaling transformation as used on the training data
+        input_scaled = scaler.transform(input_df)
+
+        try:
+            # Get prediction probabilities
+            probas = rf_model.predict_proba(input_scaled)
+
+            # Get class labels and their order
+            class_labels = rf_model.classes_
+
+            # Combine probabilities for all "fire" variations
+            prob_fire = sum(probas[0][i] for i, label in enumerate(class_labels)
+                            if label.strip() == "fire")
+
+            # Combine probabilities for all "not fire" variations
+            prob_no_fire = sum(probas[0][i] for i, label in enumerate(class_labels)
+                               if label.strip() == "not fire")
+
+            # Display prediction percentages
+            fire_percentage = prob_fire * 100
+            no_fire_percentage = prob_no_fire * 100
+
+            # Map prediction to fire/not fire based on the class with the higher probability
+            fire_prediction = "fire" if prob_fire > prob_no_fire else "not fire"
+
+            # Display the prediction and probabilities
+            st.subheader("Prediction Results")
+            st.write(f"Prediction: **{fire_prediction}**")
+            st.write(f"**Fire**: {fire_percentage:.2f}%")
+            st.write(f"**Not Fire**: {no_fire_percentage:.2f}%")
+
+        except NotFittedError:
             st.error("The model is not trained yet. Please train the model before making predictions.")
-        else:
-            # Retrieve the trained model
-            rf_model = st.session_state.rf_model
-
-            # Create a DataFrame for the user input
-            input_df = pd.DataFrame([user_input])
-
-            # Debug: Show input data
-            #st.write("Input data:", input_df)
-
-            # Check if there are any missing values and handle them
-            input_df = input_df.apply(lambda x: x.fillna(x.mean()) if x.name != target_column else x)
-
-            # Apply the same scaling transformation as used on the training data
-            input_scaled = scaler.transform(input_df)
-
-            # Debug: Show scaled input
-            #st.write("Scaled input:", input_scaled)
-
-            try:
-                # Get prediction probabilities
-                probas = rf_model.predict_proba(input_scaled)
-
-                # Debug information
-                #st.write("\nDebug Information:")
-                #st.write(f"Model Classes: {rf_model.classes_}")
-                #st.write(f"Raw Probabilities: {probas}")
-
-                # Get class labels and their order
-                class_labels = rf_model.classes_
-                #st.write(f"Class Labels: {class_labels}")
-
-                # Combine probabilities for all "fire" variations
-                prob_fire = sum(probas[0][i] for i, label in enumerate(class_labels)
-                                if label.strip() == "fire")
-
-                # Combine probabilities for all "not fire" variations
-                prob_no_fire = sum(probas[0][i] for i, label in enumerate(class_labels)
-                                   if label.strip() == "not fire")
-
-                # Display prediction percentages
-                fire_percentage = prob_fire * 100
-                no_fire_percentage = prob_no_fire * 100
-
-                # Map prediction to fire/not fire based on the class with the higher probability
-                fire_prediction = "fire" if prob_fire > prob_no_fire else "not fire"
-
-                # Display the prediction and probabilities
-                st.subheader("Prediction Results")
-                st.write(f"Prediction: **{fire_prediction}**")
-                st.write(f"**Fire**: {fire_percentage:.2f}%")
-                st.write(f"**Not Fire**: {no_fire_percentage:.2f}%")
-
-            except NotFittedError:
-                st.error("The model is not trained yet. Please train the model before making predictions.")
-            except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
-                st.write("Exception type:", type(e))
-                import traceback
-
-                st.write("Traceback:", traceback.format_exc())
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+            import traceback
+            st.write("Traceback:", traceback.format_exc())
