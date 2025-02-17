@@ -56,9 +56,11 @@ if uploaded_file:
             st.error(f"Missing required feature: {feature}")
             st.stop()
 
-    # Check if the target column is available
-    target_column = st.sidebar.selectbox("Select Target Column",
-                                         options=[col for col in df.columns if col not in features])
+    # Automatically set the target column to "Result" if it exists
+    target_column = "Result"
+    if target_column not in df.columns:
+        st.error(f"Target column '{target_column}' not found in the dataset.")
+        st.stop()
 
     # Debug: Show target column unique values
     #st.write(f"Target column ({target_column}) unique values:", df[target_column].unique())
