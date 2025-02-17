@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import NotFittedError
 import matplotlib.pyplot as plt
@@ -33,42 +33,53 @@ if uploaded_file:
     # Display the dataset preview
     st.subheader("Dataset Preview")
 
-    # Ensure year column is displayed as integers without formatting
-    if "Year" in df.columns:  # Replace "Year" with the actual column name, if different
+    # Ensure 'Year' column is displayed as integers without formatting
+    if "Year" in df.columns:
         df["Year"] = df["Year"].astype(int)
 
-    # Format the 'Year' column to ensure no commas in display
-    df['Year'] = df['Year'].apply(lambda x: f"{x:.0f}")  # Remove comma formatting by converting to string
-
     st.dataframe(df.head())
+
+    # Debug: Show unique values in each column
+    #st.write("Unique values in each column:")
+    #for col in df.columns:
+    #    st.write(f"{col}: {df[col].unique()}")
 
     # Strip extra spaces from column names
     df.columns = df.columns.str.strip()
 
-    # Input to select the target column
-    target_column = st.sidebar.selectbox("Select Target Column", options=df.columns)
+    # Select the features to use for prediction
+    features = ['Temperature', 'RH (Relative Humidity)', 'WS (Wind Speed)', 'Rain']
 
-    # Check for non-numeric columns
-    exclude_columns = [target_column]
-    for col in df.columns:
-        if col not in exclude_columns:
-            try:
-                pd.to_numeric(df[col], errors="raise")
-            except ValueError:
-                pass
+    # Ensure all the selected features exist in the dataset
+    for feature in features:
+        if feature not in df.columns:
+            st.error(f"Missing required feature: {feature}")
+            st.stop()
+
+    # Check if the target column is available
+    target_column = st.sidebar.selectbox("Select Target Column",
+                                         options=[col for col in df.columns if col not in features])
+
+    # Debug: Show target column unique values
+    #st.write(f"Target column ({target_column}) unique values:", df[target_column].unique())
+
+    # Clean the target column values by stripping whitespace and handling NaN values
+    df[target_column] = df[target_column].str.strip()  # Remove extra spaces
+    df = df.dropna(subset=[target_column])  # Drop rows with NaN values in the target column
+    df[target_column] = df[target_column].replace({"fire": "fire", "not fire": "not fire"})  # Standardize labels
+
+    # Debug: Show target column unique values after cleaning
+    #st.write(f"Target column values after cleaning:", df[target_column].unique())
 
     # Convert all numeric columns
-    df = df.apply(lambda x: pd.to_numeric(x, errors="coerce") if x.name != target_column else x)
+    df = df.apply(lambda x: pd.to_numeric(x, errors="coerce") if x.name not in [target_column] else x)
 
     # Handle missing values
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    numeric_cols = df[features + [target_column]].select_dtypes(include=[np.number]).columns
     df[numeric_cols] = df[numeric_cols].apply(lambda col: col.fillna(col.mean()))
 
-    # Ensure target column is categorical
-    df[target_column] = df[target_column].astype(str)
-
     # Define feature and target variables
-    X = df.drop(target_column, axis=1)
+    X = df[features]
     y = df[target_column]
 
     # Split dataset
@@ -96,6 +107,9 @@ if uploaded_file:
         st.session_state.model_trained = True  # Set the model_trained flag to True
         y_pred = rf_model.predict(X_test)
 
+        # Debug: Show model classes after training
+        #st.write("Model Classes after training:", rf_model.classes_)
+
         # Evaluate the model
         st.subheader("Model Evaluation")
         st.write(f"**Accuracy:** {accuracy_score(y_test, y_pred):.2f}")
@@ -103,7 +117,6 @@ if uploaded_file:
         # Feature Importance
         st.subheader("Feature Importance")
         feature_importance = rf_model.feature_importances_
-        features = X.columns
         importance_df = pd.DataFrame({"Feature": features, "Importance": feature_importance}).sort_values(
             by="Importance", ascending=False)
 
@@ -121,7 +134,7 @@ if uploaded_file:
     user_input = {}
 
     # Create number input fields for each feature on the main page
-    for feature in X.columns:
+    for feature in features:
         user_input[feature] = st.number_input(f"Enter {feature}", value=float(X[feature].mean()))
 
     # Prediction button on the main page
@@ -135,28 +148,57 @@ if uploaded_file:
             # Create a DataFrame for the user input
             input_df = pd.DataFrame([user_input])
 
-            # Check if there are any missing values and handle them (fill with column means, similar to training data preprocessing)
+            # Debug: Show input data
+            #st.write("Input data:", input_df)
+
+            # Check if there are any missing values and handle them
             input_df = input_df.apply(lambda x: x.fillna(x.mean()) if x.name != target_column else x)
 
             # Apply the same scaling transformation as used on the training data
             input_scaled = scaler.transform(input_df)
 
+            # Debug: Show scaled input
+            #st.write("Scaled input:", input_scaled)
+
             try:
-                # Make prediction
-                prediction = rf_model.predict(input_scaled)
+                # Get prediction probabilities
+                probas = rf_model.predict_proba(input_scaled)
 
-                # Debugging: Output raw prediction
-                #st.write(f"Prediction Array: {prediction}")
+                # Debug information
+                #st.write("\nDebug Information:")
+                #st.write(f"Model Classes: {rf_model.classes_}")
+                #st.write(f"Raw Probabilities: {probas}")
 
-                # Strip any leading/trailing whitespace from the prediction
-                cleaned_prediction = prediction[0].strip()
+                # Get class labels and their order
+                class_labels = rf_model.classes_
+                #st.write(f"Class Labels: {class_labels}")
 
-                # Map prediction to Fire/No Fire based on the class labels
-                fire_prediction = "Fire" if cleaned_prediction.lower() == 'fire' else "No Fire"
+                # Combine probabilities for all "fire" variations
+                prob_fire = sum(probas[0][i] for i, label in enumerate(class_labels)
+                                if label.strip() == "fire")
 
+                # Combine probabilities for all "not fire" variations
+                prob_no_fire = sum(probas[0][i] for i, label in enumerate(class_labels)
+                                   if label.strip() == "not fire")
+
+                # Display prediction percentages
+                fire_percentage = prob_fire * 100
+                no_fire_percentage = prob_no_fire * 100
+
+                # Map prediction to fire/not fire based on the class with the higher probability
+                fire_prediction = "fire" if prob_fire > prob_no_fire else "not fire"
+
+                # Display the prediction and probabilities
                 st.subheader("Prediction Results")
                 st.write(f"Prediction: **{fire_prediction}**")
+                st.write(f"**Fire**: {fire_percentage:.2f}%")
+                st.write(f"**Not Fire**: {no_fire_percentage:.2f}%")
+
             except NotFittedError:
                 st.error("The model is not trained yet. Please train the model before making predictions.")
             except Exception as e:
-                st.error(f"An error occurred: {e}")
+                st.error(f"An error occurred: {str(e)}")
+                st.write("Exception type:", type(e))
+                import traceback
+
+                st.write("Traceback:", traceback.format_exc())
